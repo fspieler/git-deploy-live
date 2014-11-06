@@ -1,0 +1,65 @@
+#!/bin/sh -e
+BUILD_DIR=/var/git/build-dir
+APP_INSTANCE_BASE=/var/www/app-instances
+BACKUP_DIR=$APP_INSTANCE_BASE/app-backups
+APPNAME=homepage
+APPVERSION=1.0-SNAPSHOT
+
+git --work-tree=$BUILD_DIR --git-dir=/var/git/project.git checkout -f
+
+#compile
+cd $BUILD_DIR
+./activator dist
+
+TIMESTAMP=`date +"%Y_%b_%d-%H_%M_%S-%Z"`
+ZIP_NAME=app_deployment-$TIMESTAMP
+
+#move old zip to backups and only keep 4 most recent zips
+mv $APP_INSTANCE_BASE/*.zip $BACKUP_DIR
+cd $BACKUP_DIR; ls -t | sed '1,4d' | xargs echo rm
+cp $BUILD_DIR/target/universal/$APPNAME-$APPVERSION.zip $APP_INSTANCE_BASE/$(echo $ZIP_NAME).zip
+
+#launch first instance
+INSTANCE=$APP_INSTANCE_BASE/instance-0
+INSTANCE_PROJ=$INSTANCE/$APPNAME-$APPVERSION
+PORT=9000
+if [ -d $INSTANCE ] ; then
+    #if instance running, kill it
+    PID_F=$INSTANCE_PROJ/RUNNING_PID
+    if [ -f $PID_F ] ; then
+        kill -15 `cat $PID_F`
+    fi  
+    rm -rf $INSTANCE/*
+fi
+mkdir -p $INSTANCE
+unzip $APP_INSTANCE_BASE/$ZIP_NAME -d $INSTANCE
+
+cd $INSTANCE/$APPNAME-$APPVERSION
+chmod ug+x bin/$APPNAME
+nohup ./bin/$APPNAME -Dhttp.port=$PORT -Dconfig.file=conf/production.conf &
+
+
+INSTANCE=$APP_INSTANCE_BASE/instance-1
+INSTANCE_PROJ=$INSTANCE/$APPNAME-$APPVERSION
+PORT=9001
+if [ -d $INSTANCE ] ; then
+    PID_F=$INSTANCE_PROJ/RUNNING_PID
+    if [ -f $PID_F ] ; then
+        kill -15 `cat $PID_F`
+    fi  
+    rm -rf $INSTANCE/*
+fi
+mkdir -p $INSTANCE
+unzip $APP_INSTANCE_BASE/$ZIP_NAME -d $INSTANCE
+
+cd $INSTANCE/$APPNAME-$APPVERSION
+chmod ug+x bin/$APPNAME
+nohup ./bin/$APPNAME -Dhttp.port=$PORT -Dconfig.file=conf/production.conf &
+
+#TODO verify both servers respond to tests instead of just checking correct number of VMs running)
+NUM_JAVA_PROCS=`ps aux | grep java | wc -l`
+if [ $NUM_JAVA_PROCS -ne 2 ] ; then
+    echo "Warning: $NUM_JAVA_PROCS jvm procs detected (expecting exactly 2 jvms)."
+else
+    echo "Possible success: $NUM_JAVA_PROCS jvm procs detected"
+fi
